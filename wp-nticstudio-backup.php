@@ -253,8 +253,8 @@ if ( ! class_exists( 'Puc_v4_Factory' ) ) {
 }
 
 $updateChecker = Puc_v4_Factory::buildUpdateChecker(
-    'https://github.com/Nticstudio/nticstudio-backup', // URL du dépôt GitHub
+    'https://github.com/Nticstudio/wp-nticstudio-backup', // URL du dépôt GitHub
     __FILE__,
-    'nticstudio-backup'
+    'wp-nticstudio-backup'
 );
 $updateChecker->setBranch('main'); // Modifier si votre branche par défaut n'est pas "main"
