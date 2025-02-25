@@ -1,0 +1,23 @@
+name: Generate Dist File for Plugin
+on:
+  push:
+    tags:
+      - '*'
+
+permissions:
+  contents: write
+
+jobs:
+  generate-json-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Run WP Self-Host Update JSON Generator
+        uses: eduardovillao/wp-self-host-updater-generator@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
