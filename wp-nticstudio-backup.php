@@ -1,8 +1,8 @@
 <?php
 /*
 Plugin Name: Nticstudio Backup
-Description: Plugin de sauvegarde automatique des fichiers (wp-content) et de la base de données, puis transfert via SFTP vers un serveur distant. L'exécution est lancée par un cron. Le plugin intègre également un test de connexion SFTP et un système de mise à jour automatique via GitHub.
-Version: 1.3
+Description: Plugin de sauvegarde automatique (BDD et wp-content) et transfert via SFTP (cURL) vers un serveur distant, lancé via cron. Intègre également un test SFTP, une mise à jour automatique via GitHub et une interface de configuration sécurisée.
+Version: 1.0
 Author: Nticstudio
 */
 
@@ -10,19 +10,8 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit; // Exit if accessed directly.
 }
 
-// =====================
-// Configuration SFTP et backup
-// =====================
-define( 'WBSFTP_SFTP_HOST', 'sftp.hidrive.ionos.com' );
-define( 'WBSFTP_SFTP_PORT', 22 );
-define( 'WBSFTP_SFTP_USER', 'nticstudio' );
-define( 'WBSFTP_SFTP_PASS', '2Fb?*?ue_8M_b$#' );
-define( 'WBSFTP_SFTP_REMOTE_PATH', '/sites/ucanfit/' ); // Doit se terminer par /
-
+// Le dossier de backup est défini par rapport au dossier uploads de WordPress.
 define( 'WBSFTP_BACKUP_DIR', wp_upload_dir()['basedir'] . '/wp-backup-sftp' );
-
-// Nombre de sauvegardes à conserver (paramètre de rétention), par défaut 4
-define( 'WBSFTP_RETENTION', 4 );
 
 /**
  * Récupère les options du plugin avec des valeurs par défaut.
@@ -31,49 +20,46 @@ function nticstudio_backup_get_options() {
     $defaults = array(
         'sftp_host'         => 'sftp.hidrive.ionos.com',
         'sftp_port'         => 22,
-        'sftp_user'         => 'nticstudio',
-        'sftp_pass'         => '2Fb?*?ue_8M_b$#',
+        'sftp_user'         => '',
+        'sftp_pass'         => '',
         'sftp_remote_path'  => '/sites/',  // Doit se terminer par /
-        'retention'         => 4,
+        'retention'         => 10,
     );
     $options = get_option( 'nticstudio_backup_options', array() );
     return wp_parse_args( $options, $defaults );
 }
 
-// ========================================
-// Activation et désactivation du plugin
-// ========================================
-function wbsftp_activate() {
-    if ( ! wp_next_scheduled( 'wbsftp_cron_hook' ) ) {
-        wp_schedule_event( time(), 'daily', 'wbsftp_cron_hook' ); // Exécution quotidienne (modifiable)
+/* ========================================
+   Activation / Désactivation et Cron
+======================================== */
+function nticstudio_backup_activate() {
+    if ( ! wp_next_scheduled( 'nticstudio_backup_cron_hook' ) ) {
+        wp_schedule_event( time(), 'daily', 'nticstudio_backup_cron_hook' );
     }
 }
-register_activation_hook( __FILE__, 'wbsftp_activate' );
+register_activation_hook( __FILE__, 'nticstudio_backup_activate' );
 
-function wbsftp_deactivate() {
-    $timestamp = wp_next_scheduled( 'wbsftp_cron_hook' );
-    wp_unschedule_event( $timestamp, 'wbsftp_cron_hook' );
+function nticstudio_backup_deactivate() {
+    $timestamp = wp_next_scheduled( 'nticstudio_backup_cron_hook' );
+    wp_unschedule_event( $timestamp, 'nticstudio_backup_cron_hook' );
 }
-register_deactivation_hook( __FILE__, 'wbsftp_deactivate' );
+register_deactivation_hook( __FILE__, 'nticstudio_backup_deactivate' );
 
-// =====================================
-// Lancement de la sauvegarde via cron
-// =====================================
-add_action( 'wbsftp_cron_hook', 'wbsftp_run_backup' );
+add_action( 'nticstudio_backup_cron_hook', 'nticstudio_backup_run' );
 
-function wbsftp_run_backup() {
-    // Création du dossier de sauvegarde si nécessaire
+/**
+ * Exécute la sauvegarde (BDD + fichiers) puis transfère l'archive via SFTP.
+ */
+function nticstudio_backup_run() {
+    // Création du dossier de sauvegarde si nécessaire.
     if ( ! file_exists( WBSFTP_BACKUP_DIR ) ) {
         wp_mkdir_p( WBSFTP_BACKUP_DIR );
     }
     $backup_file = 'backup_' . date( 'Y-m-d_H-i-s' ) . '.zip';
     $backup_file_path = WBSFTP_BACKUP_DIR . '/' . $backup_file;
 
-    // ============================
-    // 1. Sauvegarde de la BDD
-    // ============================
-    $db_dump_file = tempnam( sys_get_temp_dir(), 'wbsftp_db_' ) . '.sql';
-    // La commande mysqldump nécessite que exec soit activé
+    // 1. Sauvegarde de la base de données.
+    $db_dump_file = tempnam( sys_get_temp_dir(), 'nticstudio_db_' ) . '.sql';
     $command = sprintf(
         'mysqldump --host=%s --user=%s --password=%s %s > %s',
         DB_HOST,
@@ -84,60 +70,44 @@ function wbsftp_run_backup() {
     );
     exec( $command, $output, $return_var );
     if ( $return_var !== 0 ) {
-        error_log( 'Nticstudio Backup: Erreur lors de la sauvegarde de la base de données.' );
+        error_log( 'Nticstudio Backup: Erreur lors de la sauvegarde de la BDD.' );
         return;
     }
 
-    // ============================
-    // 2. Création de l'archive ZIP
-    // ============================
+    // 2. Création de l'archive ZIP.
     $zip = new ZipArchive();
     if ( $zip->open( $backup_file_path, ZipArchive::CREATE ) !== TRUE ) {
-        error_log( 'Nticstudio Backup: Impossible de créer le fichier zip.' );
+        error_log( 'Nticstudio Backup: Impossible de créer l\'archive ZIP.' );
         return;
     }
-
-    // Ajout du dump de la BDD dans le dossier "db" de l'archive
     $zip->addFile( $db_dump_file, 'db/backup.sql' );
-
-    // Ajout des fichiers (ici le dossier wp-content) dans le dossier "files" de l'archive
     $source = realpath( WP_CONTENT_DIR );
     if ( is_dir( $source ) ) {
-        wbsftp_add_folder_to_zip( $source, $zip, 'files' );
+        nticstudio_backup_add_folder_to_zip( $source, $zip, 'files' );
     } else {
-        error_log( 'Nticstudio Backup: Le dossier wp-content introuvable.' );
+        error_log( 'Nticstudio Backup: Dossier wp-content introuvable.' );
     }
     $zip->close();
-
-    // Suppression du fichier temporaire de la BDD
     unlink( $db_dump_file );
 
-    // ====================================
-    // 3. Transfert de l'archive via SFTP
-    // ====================================
-    wbsftp_send_via_sftp( $backup_file_path );
+    // 3. Transfert via SFTP (cURL).
+    nticstudio_backup_send_via_sftp( $backup_file_path );
 
-    // ====================================
-    // 4. Gestion de la rétention des sauvegardes
-    // ====================================
-    wbsftp_cleanup_backups();
+    // 4. Gestion de la rétention des sauvegardes.
+    nticstudio_backup_cleanup();
 }
 
 /**
  * Ajoute récursivement un dossier dans l'archive ZIP.
- *
- * @param string       $folder     Chemin du dossier à ajouter.
- * @param ZipArchive   $zip        Instance de ZipArchive.
- * @param string       $zip_folder Dossier dans l'archive où ajouter les fichiers.
  */
-function wbsftp_add_folder_to_zip( $folder, &$zip, $zip_folder ) {
+function nticstudio_backup_add_folder_to_zip( $folder, &$zip, $zip_folder ) {
     $files = new RecursiveIteratorIterator(
         new RecursiveDirectoryIterator( $folder ),
         RecursiveIteratorIterator::LEAVES_ONLY
     );
     foreach ( $files as $file ) {
         if ( ! $file->isDir() ) {
-            $filePath     = $file->getRealPath();
+            $filePath = $file->getRealPath();
             $relativePath = $zip_folder . '/' . substr( $filePath, strlen( $folder ) + 1 );
             $zip->addFile( $filePath, $relativePath );
         }
@@ -145,23 +115,21 @@ function wbsftp_add_folder_to_zip( $folder, &$zip, $zip_folder ) {
 }
 
 /**
- * Transfère le fichier de sauvegarde vers le serveur distant via SFTP en utilisant cURL.
- *
- * @param string $local_file Chemin local du fichier de sauvegarde.
+ * Transfère l'archive de sauvegarde vers le serveur distant via SFTP (cURL).
  */
-function wbsftp_send_via_sftp( $local_file ) {
-    $remote_file = WBSFTP_SFTP_REMOTE_PATH . basename( $local_file );
-    $url = "sftp://" . WBSFTP_SFTP_HOST . ":" . WBSFTP_SFTP_PORT . $remote_file;
+function nticstudio_backup_send_via_sftp( $local_file ) {
+    $options = nticstudio_backup_get_options();
+    $remote_file = $options['sftp_remote_path'] . basename( $local_file );
+    $url = "sftp://{$options['sftp_host']}:{$options['sftp_port']}{$remote_file}";
 
     $fp = fopen( $local_file, 'r' );
     if ( ! $fp ) {
-        error_log( 'Nticstudio Backup: Impossible d\'ouvrir le fichier local pour le transfert.' );
+        error_log( 'Nticstudio Backup: Impossible d\'ouvrir le fichier local.' );
         return;
     }
-
     $ch = curl_init();
     curl_setopt( $ch, CURLOPT_URL, $url );
-    curl_setopt( $ch, CURLOPT_USERPWD, WBSFTP_SFTP_USER . ":" . WBSFTP_SFTP_PASS );
+    curl_setopt( $ch, CURLOPT_USERPWD, $options['sftp_user'] . ':' . $options['sftp_pass'] );
     curl_setopt( $ch, CURLOPT_UPLOAD, 1 );
     curl_setopt( $ch, CURLOPT_INFILE, $fp );
     curl_setopt( $ch, CURLOPT_INFILESIZE, filesize( $local_file ) );
@@ -169,57 +137,50 @@ function wbsftp_send_via_sftp( $local_file ) {
     
     $result = curl_exec( $ch );
     if ( curl_errno( $ch ) ) {
-        error_log( 'Nticstudio Backup: cURL error lors du transfert SFTP: ' . curl_error( $ch ) );
+        error_log( 'Nticstudio Backup: Erreur cURL lors du transfert SFTP: ' . curl_error( $ch ) );
     } else {
-        error_log( 'Nticstudio Backup: Sauvegarde transférée avec succès vers ' . $remote_file );
+        error_log( 'Nticstudio Backup: Sauvegarde transférée vers ' . $remote_file );
     }
     curl_close( $ch );
     fclose( $fp );
 }
 
-
 /**
- * Nettoie le dossier de sauvegarde en supprimant les anciennes archives
- * si leur nombre dépasse la valeur définie par WBSFTP_RETENTION.
+ * Supprime les anciennes sauvegardes si leur nombre dépasse la valeur de rétention.
  */
-function wbsftp_cleanup_backups() {
+function nticstudio_backup_cleanup() {
+    $options = nticstudio_backup_get_options();
     $files = glob( WBSFTP_BACKUP_DIR . '/backup_*.zip' );
-    if ( $files !== false && count( $files ) > WBSFTP_RETENTION ) {
-        // Tri des fichiers par date de modification croissante (les plus anciens en premier)
+    if ( $files !== false && count( $files ) > $options['retention'] ) {
         usort( $files, function( $a, $b ) {
             return filemtime( $a ) - filemtime( $b );
         });
-        // Suppression des fichiers en excès
-        while ( count( $files ) > WBSFTP_RETENTION ) {
+        while ( count( $files ) > $options['retention'] ) {
             $oldest = array_shift( $files );
             unlink( $oldest );
-            error_log( 'Nticstudio Backup: Suppression de l\'ancienne sauvegarde ' . basename( $oldest ) );
+            error_log( 'Nticstudio Backup: Suppression de ' . basename( $oldest ) );
         }
     }
 }
 
 /**
- * Teste la connexion SFTP en créant puis supprimant un fichier de test sur le serveur distant via cURL.
- *
- * @return true|WP_Error Retourne true en cas de succès ou un WP_Error en cas d'erreur.
+ * Teste la connexion SFTP en uploadant puis supprimant un fichier test via cURL.
  */
-function wbsftp_test_sftp() {
-    // Création d'un fichier temporaire pour le test
+function nticstudio_backup_test_sftp() {
+    $options = nticstudio_backup_get_options();
     $temp_file = tempnam( sys_get_temp_dir(), 'nticstudio_test_' ) . '.txt';
     file_put_contents( $temp_file, "Test SFTP " . date( 'Y-m-d H:i:s' ) );
+    $remote_file = $options['sftp_remote_path'] . 'test_sftp_' . time() . '.txt';
+    $upload_url = "sftp://{$options['sftp_host']}:{$options['sftp_port']}{$remote_file}";
 
-    $remote_file = WBSFTP_SFTP_REMOTE_PATH . 'test_sftp_' . time() . '.txt';
-    $upload_url = "sftp://" . WBSFTP_SFTP_HOST . ":" . WBSFTP_SFTP_PORT . $remote_file;
-
-    // Upload du fichier test via cURL
     $fp = fopen( $temp_file, 'r' );
     if ( ! $fp ) {
         unlink( $temp_file );
-        return new WP_Error( 'temp_file_error', "Impossible d'ouvrir le fichier temporaire pour le test SFTP." );
+        return new WP_Error( 'temp_file_error', "Impossible d'ouvrir le fichier temporaire." );
     }
     $ch = curl_init();
     curl_setopt( $ch, CURLOPT_URL, $upload_url );
-    curl_setopt( $ch, CURLOPT_USERPWD, WBSFTP_SFTP_USER . ":" . WBSFTP_SFTP_PASS );
+    curl_setopt( $ch, CURLOPT_USERPWD, $options['sftp_user'] . ':' . $options['sftp_pass'] );
     curl_setopt( $ch, CURLOPT_UPLOAD, 1 );
     curl_setopt( $ch, CURLOPT_INFILE, $fp );
     curl_setopt( $ch, CURLOPT_INFILESIZE, filesize( $temp_file ) );
@@ -235,13 +196,11 @@ function wbsftp_test_sftp() {
     curl_close( $ch );
     fclose( $fp );
 
-    // Suppression du fichier test via cURL en utilisant l'option CURLOPT_QUOTE
+    // Suppression du fichier de test via cURL (en envoyant une commande "rm")
     $ch = curl_init();
-    // L'URL doit pointer vers le répertoire distant
-    $delete_url = "sftp://" . WBSFTP_SFTP_HOST . ":" . WBSFTP_SFTP_PORT . WBSFTP_SFTP_REMOTE_PATH;
-
+    $delete_url = "sftp://{$options['sftp_host']}:{$options['sftp_port']}{$options['sftp_remote_path']}";
     curl_setopt( $ch, CURLOPT_URL, $delete_url );
-    curl_setopt( $ch, CURLOPT_USERPWD, WBSFTP_SFTP_USER . ":" . WBSFTP_SFTP_PASS );
+    curl_setopt( $ch, CURLOPT_USERPWD, $options['sftp_user'] . ':' . $options['sftp_pass'] );
     curl_setopt( $ch, CURLOPT_QUOTE, array( "rm " .  $remote_file  ) );
     curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
     $result = curl_exec( $ch );
@@ -256,100 +215,225 @@ function wbsftp_test_sftp() {
     return true;
 }
 
-// ==================================================
-// Ajout d'une page d'administration pour tester SFTP
-// ==================================================
-add_action( 'admin_menu', 'wbsftp_add_admin_menu' );
-
-
-function wbsftp_add_admin_menu() {
-    // Menu principal
+/* ========================================
+   Admin Menu et Pages de Configuration
+======================================== */
+add_action( 'admin_menu', 'nticstudio_backup_add_admin_menu' );
+function nticstudio_backup_add_admin_menu() {
     add_menu_page(
-        'Nticstudio Backup',         // Titre de la page
-        'Nticstudio Backup',         // Titre du menu
-        'manage_options',            // Capacité requise
-        'nticstudio-backup',         // Slug du menu
-        'wbsftp_backup_page',        // Fonction de rappel pour le contenu de la page (backup)
-        'dashicons-backup',          // Icône (optionnel)
-        80                           // Position dans le menu
+        'Nticstudio Backup',
+        'Nticstudio Backup',
+        'manage_options',
+        'nticstudio-backup',
+        'nticstudio_backup_dashboard_page',
+        'dashicons-backup',
+        80
     );
-    
-    // Sous-menu pour le tableau de bord (backup)
     add_submenu_page(
-        'nticstudio-backup',         // Slug du menu parent
-        'Nticstudio Backup',         // Titre de la page
-        'Dashboard',                 // Titre du sous-menu
-        'manage_options',            // Capacité requise
-        'nticstudio-backup',         // Slug (identique à celui du menu principal pour rediriger vers la même page)
-        'wbsftp_backup_page'         // Fonction de rappel pour le contenu
+        'nticstudio-backup',
+        'Dashboard',
+        'Dashboard',
+        'manage_options',
+        'nticstudio-backup',
+        'nticstudio_backup_dashboard_page'
     );
-    
-    // Sous-menu pour le test SFTP
     add_submenu_page(
-        'nticstudio-backup',         // Slug du menu parent
-        'Nticstudio Test SFTP',      // Titre de la page
-        'Test SFTP',                 // Titre du sous-menu
-        'manage_options',            // Capacité requise
-        'wbsftp-test',               // Slug unique pour cette page
-        'wbsftp_test_page'           // Fonction de rappel pour le contenu
+        'nticstudio-backup',
+        'Test SFTP',
+        'Test SFTP',
+        'manage_options',
+        'nticstudio-backup-test',
+        'nticstudio_backup_test_page'
+    );
+    add_submenu_page(
+        'nticstudio-backup',
+        'Settings',
+        'Settings',
+        'manage_options',
+        'nticstudio-backup-settings',
+        'nticstudio_backup_settings_page'
     );
 }
 
-
-function wbsftp_test_page() {
-    if ( ! current_user_can( 'manage_options' ) ) {
-        wp_die( 'Vous n\'avez pas les droits suffisants pour accéder à cette page.' );
-    }
-    $result = null;
-    if ( isset( $_POST['wbsftp_test'] ) ) {
-        $result = wbsftp_test_sftp();
+function nticstudio_backup_dashboard_page() {
+    // Vérification de la soumission du formulaire pour lancer le backup
+    if ( isset( $_POST['nticstudio_backup_run'] ) && check_admin_referer( 'nticstudio_backup_run', 'nticstudio_backup_nonce' ) ) {
+        // Lancement du backup
+        nticstudio_backup_run();
+        echo '<div class="updated"><p>La sauvegarde a été lancée.</p></div>';
     }
     ?>
     <div class="wrap">
-        <h1>Test SFTP</h1>
-        <?php if ( $result === true ) : ?>
-            <div class="updated"><p>La connexion SFTP a réussi.</p></div>
-        <?php elseif ( is_wp_error( $result ) ) : ?>
-            <div class="error"><p>Erreur : <?php echo $result->get_error_message(); ?></p></div>
+        <h1>Nticstudio Backup Dashboard</h1>
+        <p>Utilisez ce dashboard pour lancer des sauvegardes et vérifier l'état du système.</p>
+        <form method="post">
+            <?php wp_nonce_field( 'nticstudio_backup_run', 'nticstudio_backup_nonce' ); ?>
+            <?php submit_button( 'Lancer la sauvegarde', 'primary', 'nticstudio_backup_run' ); ?>
+        </form>
+    </div>
+    <?php
+}
+
+function nticstudio_backup_test_page() {
+    if ( isset( $_POST['nticstudio_backup_test'] ) ) {
+        $result = nticstudio_backup_test_sftp();
+    }
+    ?>
+    <div class="wrap">
+        <h1>Nticstudio Test SFTP</h1>
+        <?php if ( isset( $result ) && $result === true ) : ?>
+            <div class="updated"><p>Connexion SFTP réussie.</p></div>
+        <?php elseif ( isset( $result ) && is_wp_error( $result ) ) : ?>
+            <div class="error"><p>Erreur: <?php echo $result->get_error_message(); ?></p></div>
         <?php endif; ?>
         <form method="post">
-            <?php submit_button( 'Tester la connexion SFTP', 'primary', 'wbsftp_test' ); ?>
+            <?php submit_button( 'Tester la connexion SFTP', 'primary', 'nticstudio_backup_test' ); ?>
         </form>
     </div>
     <?php
 }
 
-
-function wbsftp_backup_page() {
-    if ( ! current_user_can( 'manage_options' ) ) {
-        wp_die( 'Vous n\'avez pas les droits suffisants pour accéder à cette page.' );
-    }
-    $result = null;
-    if ( isset( $_POST['wbsftp_backup'] ) ) {
-        wbsftp_run_backup();
-    }
+function nticstudio_backup_settings_page() {
     ?>
     <div class="wrap">
-        <h1>Backup SFTP</h1>
-        <form method="post">
-            <?php submit_button( 'Run backup ', 'primary', 'wbsftp_backup' ); ?>
+        <h1>Nticstudio Backup Settings</h1>
+        <form method="post" action="options.php">
+            <?php
+            settings_fields( 'nticstudio_backup_options_group' );
+            do_settings_sections( 'nticstudio-backup-settings' );
+            submit_button();
+            ?>
         </form>
     </div>
     <?php
 }
 
-// ==================================================
-// Mise à jour automatique via GitHub
-// ==================================================
-// Assurez-vous que le dossier "plugin-update-checker" est présent dans le répertoire du plugin
+add_action( 'admin_init', 'nticstudio_backup_register_settings' );
+function nticstudio_backup_register_settings() {
+    register_setting( 'nticstudio_backup_options_group', 'nticstudio_backup_options', 'nticstudio_backup_options_validate' );
+
+    add_settings_section(
+        'nticstudio_backup_settings_section',
+        'Configuration SFTP et Backup',
+        'nticstudio_backup_section_text',
+        'nticstudio-backup-settings'
+    );
+
+    add_settings_field(
+        'nticstudio_backup_options[sftp_host]',
+        'SFTP Host',
+        'nticstudio_backup_setting_sftp_host',
+        'nticstudio-backup-settings',
+        'nticstudio_backup_settings_section'
+    );
+    add_settings_field(
+        'nticstudio_backup_options[sftp_port]',
+        'SFTP Port',
+        'nticstudio_backup_setting_sftp_port',
+        'nticstudio-backup-settings',
+        'nticstudio_backup_settings_section'
+    );
+    add_settings_field(
+        'nticstudio_backup_options[sftp_user]',
+        'SFTP User',
+        'nticstudio_backup_setting_sftp_user',
+        'nticstudio-backup-settings',
+        'nticstudio_backup_settings_section'
+    );
+    add_settings_field(
+        'nticstudio_backup_options[sftp_pass]',
+        'SFTP Password',
+        'nticstudio_backup_setting_sftp_pass',
+        'nticstudio-backup-settings',
+        'nticstudio_backup_settings_section'
+    );
+    add_settings_field(
+        'nticstudio_backup_options[sftp_remote_path]',
+        'SFTP Remote Path',
+        'nticstudio_backup_setting_sftp_remote_path',
+        'nticstudio-backup-settings',
+        'nticstudio_backup_settings_section'
+    );
+    add_settings_field(
+        'nticstudio_backup_options[retention]',
+        'Backup Retention (nombre)',
+        'nticstudio_backup_setting_retention',
+        'nticstudio-backup-settings',
+        'nticstudio_backup_settings_section'
+    );
+}
+
+function nticstudio_backup_section_text() {
+    echo '<p>Entrez les paramètres de connexion SFTP et de configuration de sauvegarde.</p>';
+}
+
+function nticstudio_backup_setting_sftp_host() {
+    $options = get_option( 'nticstudio_backup_options' );
+    $value = isset( $options['sftp_host'] ) ? esc_attr( $options['sftp_host'] ) : 'sftp.hidrive.ionos.com';
+    echo "<input id='nticstudio_backup_sftp_host' name='nticstudio_backup_options[sftp_host]' type='text' value='{$value}' />";
+}
+
+function nticstudio_backup_setting_sftp_port() {
+    $options = get_option( 'nticstudio_backup_options' );
+    $value = isset( $options['sftp_port'] ) ? absint( $options['sftp_port'] ) : 22;
+    echo "<input id='nticstudio_backup_sftp_port' name='nticstudio_backup_options[sftp_port]' type='number' value='{$value}' />";
+}
+
+function nticstudio_backup_setting_sftp_user() {
+    $options = get_option( 'nticstudio_backup_options' );
+    $value = isset( $options['sftp_user'] ) ? esc_attr( $options['sftp_user'] ) : '';
+    echo "<input id='nticstudio_backup_sftp_user' name='nticstudio_backup_options[sftp_user]' type='text' value='{$value}' />";
+}
+
+function nticstudio_backup_setting_sftp_pass() {
+    $options = get_option( 'nticstudio_backup_options' );
+    $value = isset( $options['sftp_pass'] ) ? esc_attr( $options['sftp_pass'] ) : '';
+    echo "<input id='nticstudio_backup_sftp_pass' name='nticstudio_backup_options[sftp_pass]' type='password' value='{$value}' />";
+}
+
+function nticstudio_backup_setting_sftp_remote_path() {
+    $options = get_option( 'nticstudio_backup_options' );
+    $value = isset( $options['sftp_remote_path'] ) ? esc_attr( $options['sftp_remote_path'] ) : '/sites/';
+    echo "<input id='nticstudio_backup_sftp_remote_path' name='nticstudio_backup_options[sftp_remote_path]' type='text' value='{$value}' />";
+}
+
+function nticstudio_backup_setting_retention() {
+    $options = get_option( 'nticstudio_backup_options' );
+    $value = isset( $options['retention'] ) ? absint( $options['retention'] ) : 4;
+    echo "<input id='nticstudio_backup_retention' name='nticstudio_backup_options[retention]' type='number' value='{$value}' />";
+}
+
+function nticstudio_backup_options_validate( $input ) {
+    $new_input = array();
+    $new_input['sftp_host'] = sanitize_text_field( $input['sftp_host'] );
+    $new_input['sftp_port'] = absint( $input['sftp_port'] );
+    $new_input['sftp_user'] = sanitize_text_field( $input['sftp_user'] );
+    $new_input['sftp_pass'] = sanitize_text_field( $input['sftp_pass'] );
+    $new_input['sftp_remote_path'] = sanitize_text_field( $input['sftp_remote_path'] );
+    $new_input['retention'] = absint( $input['retention'] );
+    return $new_input;
+}
+
+/* ========================================
+   Mise à jour automatique via GitHub
+======================================== */
 // if ( ! class_exists( 'Puc_v4_Factory' ) ) {
 //     require_once dirname( __FILE__ ) . '/plugin-update-checker/plugin-update-checker.php';
 // }
 
+require_once __DIR__ . '/updater-checker.php'; // Use your path to file
 
-// $updateChecker = Puc_v4_Factory::buildUpdateChecker(
-//     'https://github.com/Nticstudio/wp-nticstudio-backup', // URL du dépôt GitHub
-//     __FILE__,
-//     'wp-nticstudio-backup'
-// );
-// $updateChecker->setBranch('main'); // Modifier si votre branche par défaut n'est pas "main"
+use NticstudioWpBackup\Updater_Checker; // Use your namespace
+
+$github_username = 'nticstudio'; // Use your gitbub username
+$github_repository = 'wp-ntictudio-backup'; // Use your repository name
+$plugin_basename = plugin_basename( __FILE__ ); // Check note below
+$plugin_current_version = '1.0.0'; // Use the current version of the plugin
+
+$updater = new Updater_Checker(
+    $github_username,
+    $github_repository,
+    $plugin_basename,
+    $plugin_current_version
+);
+$updater->set_hooks();
