@@ -2,7 +2,7 @@
 /*
 Plugin Name: Nticstudio Backup
 Description: Plugin de sauvegarde automatique (BDD et wp-content) et transfert via SFTP (cURL) vers un serveur distant, lancé via cron. Intègre également un test SFTP, une mise à jour automatique via GitHub et une interface de configuration sécurisée.
-Version: 1.0
+Version: 1.0.0
 Author: Nticstudio
 */
 

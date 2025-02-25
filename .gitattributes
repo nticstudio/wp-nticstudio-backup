@@ -1,0 +1,34 @@
+# Exclude the wp-dist folder and its contents
+wp-dist/ export-ignore
+
+# Exclude hidden files and directories
+.* export-ignore
+
+# Exclude Git metadata
+.git/ export-ignore
+
+# Exclude local configuration files
+*.env export-ignore
+*.log export-ignore
+
+# Exclude development and editor-specific settings
+.vscode/ export-ignore
+.idea/ export-ignore
+*.iml export-ignore
+
+# Exclude unnecessary documentation
+*.md export-ignore
+
+# Exclude test files and directories
+tests/ export-ignore
+*.spec.js export-ignore
+*.test.js export-ignore
+
+# Exclude CI configuration files
+.github/ export-ignore
+.gitlab-ci.yml export-ignore
+
+# Exclude build configurations and dependencies
+node_modules/ export-ignore
+package-lock.json export-ignore
+yarn.lock export-ignore
