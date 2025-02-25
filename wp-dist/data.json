@@ -8,7 +8,7 @@
   "requires": "",
   "tested": "",
   "requires_php": "",
-  "last_updated": "2025-02-25T22:59:11.872Z",
+  "last_updated": "2025-02-25T23:00:18.979Z",
   "sections": {
     "description": "WP NTICStudio Backup est un plugin WordPress qui vous permet de sauvegarder facilement votre site web. Il offre une interface simple et intuitive pour créer et gérer les sauvegardes de votre site WordPress.",
     "installation": "1. Téléchargez le dossier `wp-nticstudio-backup` dans le répertoire `/wp-content/plugins/`.\n2. Activez le plugin via le menu 'Extensions' dans WordPress.\n3. Allez dans le menu 'Sauvegarde' dans l'administration WordPress pour configurer et gérer vos sauvegardes.",
