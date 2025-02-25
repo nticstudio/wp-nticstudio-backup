@@ -417,18 +417,15 @@ function nticstudio_backup_options_validate( $input ) {
 /* ========================================
    Mise à jour automatique via GitHub
 ======================================== */
-// if ( ! class_exists( 'Puc_v4_Factory' ) ) {
-//     require_once dirname( __FILE__ ) . '/plugin-update-checker/plugin-update-checker.php';
-// }
 
-require_once __DIR__ . '/updater-checker.php'; // Use your path to file
+require_once __DIR__ . '/updater-checker.php'; 
 
-use NticstudioWpBackup\Updater_Checker; // Use your namespace
+use NticstudioWpBackup\Updater_Checker; 
 
-$github_username = 'nticstudio'; // Use your gitbub username
-$github_repository = 'wp-ntictudio-backup'; // Use your repository name
-$plugin_basename = plugin_basename( __FILE__ ); // Check note below
-$plugin_current_version = '1.0.0'; // Use the current version of the plugin
+$github_username = 'nticstudio'; 
+$github_repository = 'wp-ntictudio-backup';
+$plugin_basename = plugin_basename( __FILE__ ); 
+$plugin_current_version = '1.0.0'; 
 
 $updater = new Updater_Checker(
     $github_username,
